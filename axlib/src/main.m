@@ -4,13 +4,13 @@
 #import <AppKit/AppKit.h>
 #import <Foundation/Foundation.h>
 #import <Cocoa/Cocoa.h>
+#include <ApplicationServices/ApplicationServices.h>
 
 // Exposing Private API
 // https://opensource.apple.com/source/WebCore/WebCore-7606.4.5/PAL/pal/spi/cg/CoreGraphicsSPI.h.auto.html
 uint32_t CGSMainConnectionID(void);
-CFArrayRef CGSHWCaptureWindowList(uint32_t, CGWindowID* windowList, uint32_t, CGSWindowCaptureOptions);
 typedef enum { kCGSWindowCaptureNominalResolution = 0x0200,  kCGSCaptureIgnoreGlobalClipShape = 0x0800 } CGSWindowCaptureOptions;
-
+CFArrayRef CGSHWCaptureWindowList(uint32_t, CGWindowID* windowList, uint32_t, CGSWindowCaptureOptions);
 // Expose private api for getting the window ID from an accessibility element.
 AXError _AXUIElementGetWindow(AXUIElementRef, CGWindowID* out);
 
@@ -26,7 +26,7 @@ AXUIElementRef sys_wide;
 napi_value AXHasAccessibilityPermission (napi_env env, napi_callback_info args) {
     napi_value result;
 
-    if (AXAPIEnabled()) {
+    if (AXIsProcessTrusted()) {
         napi_create_int32(env, 1, &result);
     } else {
         napi_create_int32(env, 0, &result);
@@ -110,8 +110,8 @@ napi_value AXGetElementAtPosition (napi_env env, napi_callback_info info) {
     // Get X and Y params
     int x;
     int y;
-    napi_get_value_int64(env, args[0], &x);
-    napi_get_value_int64(env, args[1], &y);
+    napi_get_value_int32(env, args[0], &x);
+    napi_get_value_int32(env, args[1], &y);
 
     // This element will contain whatever we are hovering over.
     AXUIElementRef element = NULL;
@@ -254,7 +254,7 @@ napi_value AXGetWindowList (napi_env env, napi_callback_info info) {
         
             // Get the layer of the Window.
             napi_value result_entry_layer;
-            napi_create_int64(env, [[dict objectForKey:@"kCGWindowLayer"] intValue], &result_entry_layer);
+            napi_create_int32(env, [[dict objectForKey:@"kCGWindowLayer"] intValue], &result_entry_layer);
             napi_set_named_property(env, result_entry, "layer", result_entry_layer);
 
             // Get the PID of the Window
@@ -293,7 +293,7 @@ napi_value AXGetWindowPreview (napi_env env, napi_callback_info info) {
 
     // Extract the window ID parameter    
     int wid;
-    napi_get_value_int64(env, args[0], &wid);
+    napi_get_value_int32(env, args[0], &wid);
 
     // Generate the image. This will trigger permission request.
     CGImageRef img = NULL;
@@ -320,8 +320,22 @@ napi_value AXGetWindowPreview (napi_env env, napi_callback_info info) {
         int bitsPerComponent = CGImageGetBitsPerComponent(img);
         int bytesPerRow = CGImageGetBytesPerRow(img);
         CGColorSpaceRef colorSpace = CGImageGetColorSpace(img);
-        // TODO: Have the width and height as parameters
-        CGContextRef context = CGBitmapContextCreate(NULL, 500, 500, bitsPerComponent, bytesPerRow / CGImageGetWidth(img) * 500, colorSpace, CGImageGetBitmapInfo(img));
+
+        // Scale down the image to a fixed size but maintain the aspect ratio.
+        int nativeWidth = CGImageGetWidth(img);
+        int nativeHeight = CGImageGetHeight(img);
+        float scaleRatio = nativeWidth > nativeHeight? 500.0f / nativeWidth : 500.0f / nativeHeight;
+
+        CGContextRef context = CGBitmapContextCreate(
+            NULL, 
+            (int)(nativeWidth * scaleRatio), 
+            (int)(nativeHeight * scaleRatio), 
+            bitsPerComponent, 
+            bytesPerRow / nativeWidth * (int)(nativeWidth * scaleRatio), 
+            colorSpace, 
+            CGImageGetBitmapInfo(img)
+        );
+
         CGContextSetInterpolationQuality(context, kCGInterpolationHigh);
         CGContextDrawImage(context, CGContextGetClipBoundingBox(context), img);
 
@@ -468,9 +482,9 @@ napi_value AXPerformActionOnWindow (napi_env env, napi_callback_info info) {
     int pid;
     int wid;
     int action;
-    napi_get_value_int64(env, args[0], &pid);
-    napi_get_value_int64(env, args[1], &wid);
-    napi_get_value_int64(env, args[2], &action);
+    napi_get_value_int32(env, args[0], &pid);
+    napi_get_value_int32(env, args[1], &wid);
+    napi_get_value_int32(env, args[2], &action);
 
     // This might look bizarre. Why create a separate class?
     // I think there's an C/ObjC interop issue? If I inline all of the code from this class into this function, the pid value will reset to 0.
@@ -501,8 +515,8 @@ napi_value AXCheckIfStandardWindow (napi_env env, napi_callback_info info) {
     // Extract the parameters
     int pid;
     int wid;
-    napi_get_value_int64(env, args[0], &pid);
-    napi_get_value_int64(env, args[1], &wid);
+    napi_get_value_int32(env, args[0], &pid);
+    napi_get_value_int32(env, args[1], &wid);
 
     AXUIElementRef element = AXUIElementCreateApplication(pid);
 
